@@ -1,4 +1,4 @@
-将上述代码保存为 batch_grep.sh
+batch_grep.sh
 
 
 #!/bin/bash
@@ -52,5 +52,149 @@ echo "所有文件处理完成！结果保存在 $OUTPUT_DIR 目录中"
 
 
 grepv.sh :寻找补集
+#!/bin/bash
+
+# 定义源文件路径
+SOURCE_FILE="../ni_ns_un.tsv"
+
+# 检查源文件是否存在
+if [ ! -f "$SOURCE_FILE" ]; then
+    echo "错误：找不到文件 $SOURCE_FILE，请检查路径是否正确！"
+    exit 1
+fi
+
+# 创建输出目录
+OUTPUT_DIR="grep_complement_results"
+mkdir -p "$OUTPUT_DIR"
+
+# 临时文件，用于存储单个肿瘤文件的ID（去重）
+TEMP_ID_FILE="temp_tumor_ids.txt"
+
+# 遍历当前目录下所有.tsv文件
+for file in *.tsv; do
+    # 跳过结果文件和压缩包
+    if [[ "$file" == *"_complement.tsv" || "$file" == "clas_top20.tar.gz" ]]; then
+        continue
+    fi
+    
+    echo "正在处理文件: $file"
+    
+    # 定义输出文件名（区分补集）
+    output_file="${OUTPUT_DIR}/${file%.tsv}_complement.tsv"
+    
+    # 第一步：提取当前肿瘤文件的所有非空ID并去重
+    grep -v '^$' "$file" | sort -u > "$TEMP_ID_FILE"
+    
+    # 第二步：一次性筛选补集（ni_ns_un.tsv中不在当前ID列表里的行）
+    grep -v -F -f "$TEMP_ID_FILE" "$SOURCE_FILE" > "$output_file"
+    
+    # 统计结果数量
+    complement_count=$(wc -l < "$output_file")
+    id_count=$(wc -l < "$TEMP_ID_FILE")
+    echo "文件 $file 处理完成："
+    echo "  - 该文件有 $id_count 个唯一ID"
+    echo "  - 补集结果共 $complement_count 行"
+    echo "-------------------------------------------------"
+done
+
+# 清理临时文件
+rm -f "$TEMP_ID_FILE"
+
+echo "所有文件处理完成！补集结果保存在 $OUTPUT_DIR 目录中"x
+
 specfind.sh 寻找保留在补集合中没有出现的位点
+#!/bin/bash
+
+# 定义目录路径（请确认和你的实际目录完全一致）
+GREP_DIR="grep_results"          # 存放 *_matches.tsv 的目录
+COMPLEMENT_DIR="grep_complement_results"  # 存放 *_complement.tsv 的目录
+FINAL_DIR="final_unique_results" # 最终结果输出目录
+
+# 检查核心目录是否存在
+if [ ! -d "$GREP_DIR" ]; then
+    echo "错误：目录 $GREP_DIR 不存在，请检查路径！"
+    exit 1
+fi
+if [ ! -d "$COMPLEMENT_DIR" ]; then
+    echo "错误：目录 $COMPLEMENT_DIR 不存在，请检查路径！"
+    exit 1
+fi
+
+# 创建最终结果目录（不存在则创建）
+mkdir -p "$FINAL_DIR"
+
+# 临时文件1：存储grep文件的第23列位点（去重）
+TEMP_GREP_SITES="temp_grep_sites.txt"
+# 临时文件2：存储补集文件的第23列位点（去重）
+TEMP_COMPLEMENT_SITES="temp_complement_sites.txt"
+
+# --------------------------
+# 核心逻辑：保留grep_results中不在补集文件出现的位点行
+# 1. 提取grep文件的位点 + 补集文件的位点
+# 2. 筛选grep文件中位点不在补集位点列表中的行
+# --------------------------
+for grep_file in "${GREP_DIR}"/*_matches.tsv; do
+    # 1. 提取文件基础名（去掉路径和 _matches.tsv 后缀）
+    base_name=$(basename "$grep_file" "_matches.tsv")
+    
+    # 2. 拼接对应的 complement 文件路径
+    complement_file="${COMPLEMENT_DIR}/${base_name}_complement.tsv"
+    
+    # 3. 拼接最终结果文件路径（保留grep中独有的行）
+    final_file="${FINAL_DIR}/${base_name}_unique_sites.tsv"
+
+    # 检查对应的 complement 文件是否存在
+    if [ ! -f "$complement_file" ]; then
+        echo "警告：$base_name 对应的补集文件 $complement_file 不存在，跳过！"
+        continue
+    fi
+
+    echo "====================================="
+    echo "正在处理：$base_name"
+    echo "  - 源文件：$grep_file"
+    echo "  - 补集文件：$complement_file"
+
+    # --------------------------
+    # 步骤1：提取补集文件的第23列位点（去重）
+    # --------------------------
+    awk -F'\t' '$23 {print $23}' "$complement_file" | sort -u > "$TEMP_COMPLEMENT_SITES"
+    
+    # --------------------------
+    # 步骤2：筛选grep文件中「位点不在补集位点列表」的行
+    # --------------------------
+    # 逻辑：
+    # 1) 先把补集的位点读入数组
+    # 2) 遍历grep文件，只输出第23列不在补集数组中的行
+    awk -F'\t' -v comp_sites="$TEMP_COMPLEMENT_SITES" '
+    BEGIN {
+        # 把补集的位点读入关联数组（快速查询）
+        while ((getline line < comp_sites) > 0) {
+            comp_sites_arr[line] = 1;
+        }
+        close(comp_sites); # 关闭临时文件
+    }
+    # 输出条件：第23列非空 且 不在补集位点数组中
+    $23 && !comp_sites_arr[$23] { print $0 }
+    ' "$grep_file" > "$final_file"
+
+    # 统计结果
+    # 提取grep文件的位点数量（去重）
+    awk -F'\t' '$23 {print $23}' "$grep_file" | sort -u > "$TEMP_GREP_SITES"
+    grep_site_count=$(wc -l < "$TEMP_GREP_SITES")
+    comp_site_count=$(wc -l < "$TEMP_COMPLEMENT_SITES")
+    unique_count=$(wc -l < "$final_file")
+
+    echo "  - grep文件去重位点总数：$grep_site_count"
+    echo "  - 补集文件去重位点总数：$comp_site_count"
+    echo "  - grep中独有的位点行数量：$unique_count"
+    echo "  - 结果已保存到：$final_file"
+done
+
+# 清理临时文件
+rm -f "$TEMP_GREP_SITES" "$TEMP_COMPLEMENT_SITES"
+
+echo "====================================="
+echo "所有文件处理完成！"
+echo "最终结果目录：$FINAL_DIR"
+echo "文件命名规则：xxx_unique_sites.tsv（grep_results中独有的位点行）"
 
