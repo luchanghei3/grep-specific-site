@@ -1,0 +1,4 @@
+grep -v"D.?"Cosmic GenomeScreensMutant v102 GRch38.tsv >nointron.tsv
+grep -v"synonymous variant" nointron.tsv >ni ns.tsv
+
+grep -v"Variant of unknown origin" ni ns.tsv > ni ns un.tsv
