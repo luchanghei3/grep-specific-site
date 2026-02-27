@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# 定义基因列表文件路径（第一列是基因名）
+GENE_FILE="../genes.1col.txt"
+# 定义输出目录
+OUTPUT_DIR="1000gene"
+
+# 检查基因文件是否存在
+if [ ! -f "$GENE_FILE" ]; then
+    echo "错误：找不到基因列表文件 $GENE_FILE，请检查路径！"
+    exit 1
+fi
+
+# 创建输出目录（不存在则创建）
+mkdir -p "$OUTPUT_DIR"
+
+# --------------------------
+# 核心逻辑：用awk匹配第一列的基因名交集
+# --------------------------
+for tsv_file in ./final_unique_results/*.tsv; do
+    # 跳过无关文件（压缩包/结果文件）
+    if [[ "$tsv_file" == "clas_top20.tar.gz" || "$tsv_file" == *"_matches.tsv" || "$tsv_file" == *"_complement.tsv" ]]; then
+        continue
+    fi
+    
+    # 定义输出文件名（保存在1000gene目录，和原文件同名）
+    output_file="${OUTPUT_DIR}/${tsv_file}"
+    
+    echo "正在处理文件：$tsv_file"
+    
+    # 关键awk命令：仅匹配第一列等于基因列表的行
+    awk -F'\t' -v gene_file="$GENE_FILE" '
+    BEGIN {
+        # 第一步：把基因列表读入关联数组（快速查询）
+        while ((getline gene < gene_file) > 0) {
+            # 跳过基因文件中的空行
+            if (gene != "") {
+                gene_set[gene] = 1;
+            }
+        }
+        close(gene_file); # 关闭基因文件
+    }
+    # 第二步：匹配当前行的第一列是否在基因数组中（精准匹配）
+    $1 in gene_set { print $0 }
+    ' "$tsv_file" > "$output_file"
+    
+    # 统计结果数量
+    intersect_count=$(wc -l < "$output_file")
+    echo "  - 第一列匹配的交集行数：$intersect_count"
+    echo "  - 结果保存到：$output_file"
+    echo "-------------------------------------------------"
+done
+
+echo "所有文件处理完成！结果保存在 $OUTPUT_DIR 目录中"
